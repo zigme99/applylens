@@ -1,79 +1,171 @@
 # ApplyLens
 
-Compare your resume with up to three internship descriptions. See which requirements have supporting evidence, what is not shown, and which eligibility details need checking.
+**A resume-to-internship comparison tool for students.**
 
-This is version 1 of a student project. It uses pasted text and a single structured LLM request. It is **not an autonomous job-search agent yet**.
+Paste your resume and up to three job descriptions. ApplyLens brings the requirements, supporting resume evidence, and unanswered eligibility questions into one comparison, so you can decide what to clarify and how to prepare an application.
 
-## What it does
+[Quick start](#quick-start) · [Example](#example-comparison) · [How it works](#how-it-works) · [Roadmap](#roadmap)
 
-- Shows technical requirements with quotes from the posting and resume.
-- Separates required and preferred qualifications when the text supports it.
-- Marks absent resume evidence as **not shown**, rather than assuming you lack a skill.
-- Surfaces enrollment, graduation, location, work-authorization, and sponsorship wording. Missing details stay **not stated**.
-- Gives practical next steps and a downloadable text comparison.
-- Includes a fictional, hand-written example that works without an API key.
+## Why this project
 
-There are no fit percentages, automatic applications, or claims that you qualify for a visa or job. The app does not fetch links or verify whether a listing is still open.
+Comparing internships means repeatedly checking the same things: required skills, preferred experience, graduation dates, location, and work-authorization wording. A requirement missing from your resume also does not necessarily mean you lack that skill.
 
-## Try it locally
+ApplyLens makes those distinctions visible and keeps the original wording beside the analysis. The goal is to help students make informed application decisions, without an unexplained match percentage.
 
-Python 3.10 or newer is required.
+## Features
+
+- **Compare 1–3 postings:** review each role alongside the same resume.
+- **Inspect supporting evidence:** expand a requirement to see quotes from the posting and resume.
+- **Identify resume gaps:** distinguish evidence found from qualifications not shown in the supplied text.
+- **Check eligibility details:** surface enrollment, graduation, work authorization, sponsorship, and location wording. Unspecified details remain “not stated.”
+- **Prepare next actions:** review suggested questions and application preparation steps.
+- **Export the comparison:** download a plain-text copy.
+- **Try a free example:** explore fictional inputs and a prepared comparison without an API key.
+
+## Example comparison
+
+The bundled example uses fictional student Jordan Lee and two fictional companies:
+
+| Posting requirement | Resume evidence | Result |
+|---|---|---|
+| Python and SQL | Both are listed in the skills section | Evidence found |
+| REST API experience preferred | A Flask API project is described | Relevant evidence found |
+| Tableau preferred | Tableau is not mentioned | Not shown in the resume |
+| Sponsorship policy | No policy appears in the first posting | Not stated; ask the employer |
+
+The example is **hand-written sample output**, not a live model response. It demonstrates the interface and evidence format without sending data to an API.
+
+## Tech stack
+
+| Tool | Purpose |
+|---|---|
+| Python | Application and comparison logic |
+| Streamlit | Input forms, comparison view, and downloads |
+| OpenAI Responses API | Structured analysis of the supplied text |
+| Pydantic | Response schemas and validation |
+| pytest + Streamlit AppTest | Validation, mocked API, and interface tests |
+
+**Version 1 uses one structured model request.** It is the comparison component of a future internship-search assistant; autonomous search and tool-calling workflows are planned, not implemented.
+
+## Quick start
+
+### 1. Clone and create an environment
+
+Requires **Python 3.10+**. Development checks were run on Python 3.12.
 
 ```bash
 git clone https://github.com/zigme99/applylens.git
 cd applylens
 python -m venv .venv
-source .venv/bin/activate
-# Windows: .venv\Scripts\activate
-python -m pip install -r requirements.txt
-streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
 ```
 
-The app opens on **Explore example**. Choose **Compare my jobs** to paste your own text. Add an OpenAI API key in the password field or set `OPENAI_API_KEY` in your environment. The app does not load `.env` files automatically.
+Activate the environment:
 
-The default model is `gpt-4.1-mini`; `OPENAI_MODEL` can select another Responses API model supporting structured outputs. API access and billing are separate from ChatGPT Plus. Click Compare only after reviewing the text-sharing notice.
+**macOS / Linux**
+
+```bash
+source .venv/bin/activate
+```
+
+**Windows PowerShell**
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### 2. Install and run
+
+```bash
+python -m pip install -r requirements.txt
+python -m streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
+```
+
+Open the local URL printed in your terminal. The app starts in **Explore example**, which needs no API key.
+
+### 3. Compare your own postings
+
+1. Choose **Compare my jobs** in the sidebar.
+2. Enter an OpenAI API key in the password field, or configure `OPENAI_API_KEY` in your environment.
+3. Paste your resume and select one, two, or three jobs.
+4. Add a label and the full description for each job.
+5. Review the data-sharing notice, select the consent checkbox, and click **Compare internships**.
+6. Expand the evidence and eligibility sections, then download the comparison if useful.
+
+Changing the input hides the previous comparison until you run it again.
+
+### Configuration
+
+| Setting | Default | Notes |
+|---|---|---|
+| `OPENAI_API_KEY` | None | Optional environment alternative to the sidebar password field |
+| `OPENAI_MODEL` | `gpt-4.1-mini` | Must support the Responses API and structured outputs |
+| Resume length | 80–15,000 characters | Paste text; PDF parsing is not included |
+| Each job description | 80–12,000 characters | One to three descriptions per comparison |
+
+The app does not automatically load `.env` files. OpenAI API usage requires separate API access and billing; a ChatGPT Plus subscription does not cover these requests.
 
 ## How it works
 
 ```text
-Resume + 1–3 descriptions
-        ↓
-Input length checks
-        ↓
-OpenAI structured response → Pydantic models
-        ↓
-Check quoted evidence against the original text
-        ↓
-Side-by-side comparison and text download
+Resume + job descriptions
+          |
+     Validate inputs
+          |
+  Request structured analysis
+          |
+   Validate response schema
+          |
+ Check quotes against source text
+          |
+  Display and export comparison
 ```
 
-`app.py` handles the Streamlit interface. `compare.py` contains the response models, prompt, API call, quote checks, and export. `examples.py` holds fictional sample content. `test_compare.py` tests the validation, mocked API flow, and interface.
+The prompt asks the model to treat pasted documents as data and extract relevant requirements. Pydantic checks the response structure. Local checks then verify job ordering, eligibility topics, and whether each supporting quote exists in the correct source.
 
-The quote checker accepts whitespace differences from pasting, but rejects quotations absent from the relevant source. It also checks job ordering and the five eligibility topics. This catches invented quotes; **it does not prove that the model interpreted them correctly or extracted every requirement**. Always review the source text.
+Quote checks normalize whitespace introduced by copying and pasting. A quote that is absent from its source causes the comparison to be rejected.
 
-## Run the checks
+**A verified quote is not a verified conclusion.** These checks do not establish that the model interpreted the evidence correctly or extracted every important requirement. Review the original posting before acting on the analysis.
+
+## Project structure
+
+```text
+applylens/
+├── app.py            # Streamlit interface and session state
+├── compare.py        # Schemas, prompt, API call, evidence checks, export
+├── examples.py       # Fictional inputs and prepared example output
+├── test_compare.py   # Unit and interface tests
+├── requirements.txt  # Pinned direct dependencies
+├── .gitignore
+└── README.md
+```
+
+## Testing
 
 ```bash
 python -m pytest -q
 ```
 
-Initial checks: **18 tests passed** on Python 3.12, including Streamlit interaction tests. The application also started locally.
+**Initial validation: 18 tests passed.** Tests cover input limits, invented or misplaced quotes, missing eligibility topics, provider refusal handling, exports, and Streamlit interactions. The application also started locally.
 
-Tests use fictional data and mocked provider responses. They do not consume API credits or establish real-model accuracy. A live API request has not been verified during initial development because no API key was configured.
+Provider responses are mocked in the tests. **A live API comparison has not yet been verified**, and real-model accuracy has not been measured.
 
-## Data handling
+## Privacy and current limits
 
-The app keeps inputs and results in the current Streamlit session. It does not intentionally write resumes, descriptions, or keys to disk, and it does not cache provider calls. Live mode sends the pasted documents to OpenAI using `store=False`; this setting does not mean all provider retention is disabled. Review [OpenAI's data controls](https://developers.openai.com/api/docs/guides/your-data) and remove personal details you do not need to share.
+- Inputs, keys, and results are held in the active Streamlit session. The app does not intentionally save them to disk or cache API calls.
+- Live analysis sends the pasted resume and descriptions to OpenAI. Requests use `store=False`, which does not disable every form of provider retention. Review [OpenAI's data controls](https://developers.openai.com/api/docs/guides/your-data) and remove unnecessary personal details before submitting.
+- The sample contains no real resumes. Common secret files are excluded by `.gitignore`.
+- Version 1 is designed for local use. Public hosting would need access controls, usage limits, and an appropriate privacy policy.
+- The app does not search job boards, check whether listings are open, submit applications, or determine work authorization. Eligibility notes identify questions to verify.
 
-The example uses invented people and companies. No real resume is bundled. `.gitignore` excludes common secret files. This version is intended for local use: before running a public hosted service, add access controls, request limits, and a clear privacy policy. Never expose an unrestricted server-funded API key to public traffic.
+## Roadmap
 
-## What I want to learn next
+- [ ] Test model output against a small, manually reviewed set of resume/posting pairs.
+- [ ] Add a search tool and bounded agent loop for researching accessible postings.
+- [ ] Save shortlists and application progress with SQLite.
+- [ ] Introduce resumable workflow state if the research process needs it.
 
-1. Evaluate comparisons against a small manually reviewed dataset.
-2. Add a search tool and a bounded agent loop for finding accessible postings.
-3. Save a shortlist and application status in SQLite.
-4. Add workflow state with LangGraph if the research process needs it.
+## Feedback
 
-For now, the focus is a small comparison tool that is easy to understand and improve. Built with Python, Streamlit, Pydantic, and the OpenAI API, with AI-assisted development.
+Found a confusing comparison or a missing check? [Open an issue](https://github.com/zigme99/applylens/issues) with a short description and a fictional or redacted example. Do not include API keys or private resume details.
 
-API references: [Structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs) and [GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini).
+Built with AI-assisted development as a practical learning project in structured LLM outputs, evidence validation, and Python application development.
