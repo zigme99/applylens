@@ -1,135 +1,234 @@
-"""Run with: streamlit run app.py"""
-import hashlib
-import os
-
+"""ApplyLens — local job-search and application workspace."""
+from datetime import datetime, timezone
+from pathlib import Path
+import re
+import subprocess
+import sys
 import streamlit as st
-from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
+import storage as store
+from sources import DEFAULT_BOARDS, board_specs, discover, match
+from resumes import extract, tailor, docx_bytes, tokens
 
-from compare import MODEL, MAX_JOB, MAX_RESUME, compare_jobs, export_text, validate_inputs
-from examples import LABELS, RESUME, JOBS, example_comparison
-
-st.set_page_config(page_title='ApplyLens · Internship comparison', page_icon='🔎', layout='wide')
+st.set_page_config(page_title='ApplyLens · Your next move', page_icon='↗', layout='wide')
 st.markdown('''<style>
-    .block-container {max-width: 1120px; padding-top: 2.5rem;}
-    h1 {letter-spacing: -0.045em; font-size: 3.3rem !important;}
-    h2, h3 {letter-spacing: -0.025em;}
-    [data-testid="stSidebar"] {background: #eff4fc;}
-    .stButton>button[kind="primary"] {background: #2459dc; border-color: #2459dc;}
-    [data-testid="stMetricValue"] {color: #2459dc;}
+.block-container{max-width:1240px;padding-top:2rem;padding-bottom:3rem}
+h1{font-size:2.8rem!important;letter-spacing:-.055em;font-weight:750!important}
+h2,h3{letter-spacing:-.025em} [data-testid="stSidebar"]{background:#102F2A}
+[data-testid="stSidebar"] *{color:#EBF4F0} [data-testid="stSidebar"] .stCaption{color:#ADC9C0}
+[data-testid="stMetric"]{background:white;border:1px solid #E2E8E5;border-radius:14px;padding:18px}
+[data-testid="stMetricValue"]{font-size:2rem;color:#147D64}
+[data-testid="stVerticalBlockBorderWrapper"]{border-radius:14px}
+.stButton>button{border-radius:9px} .eyebrow{color:#147D64;letter-spacing:.14em;font-size:.75rem;font-weight:700}
 </style>''', unsafe_allow_html=True)
 
-
-def show_results(result, labels, example=False):
-    st.divider()
-    st.subheader('Your comparison')
-    if example:
-        st.info('Prepared example using fictional data. These are hand-written results, not a live AI response.')
-    st.caption('Supporting quotes are checked against the input. The interpretation still needs your review. '
-               '“Not shown” means missing from the resume, not missing from your abilities.')
-    cols = st.columns(len(result.jobs))
-    for col, job in zip(cols, result.jobs):
-        with col:
-            with st.container(border=True):
-                st.subheader(labels[job.job_number - 1])
-                st.text(job.summary)
-                supported = sum(r.status == 'evidence_found' for r in job.requirements)
-                st.metric('Requirements with resume evidence', f'{supported} / {len(job.requirements)}')
-                st.caption('Count of extracted requirements, not a fit score or an exhaustive checklist.')
-                for req in job.requirements:
-                    with st.expander(f'{req.requirement} · {req.status.replace("_", " ")}'):
-                        st.caption(f'Posting importance: {req.importance}')
-                        st.text(req.explanation)
-                        st.caption('From the posting')
-                        st.text(f'“{req.job_quote}”')
-                        st.caption('From the resume')
-                        st.text(f'“{req.resume_quote}”' if req.resume_quote else 'Not shown in the supplied resume.')
-                st.markdown('**Eligibility to verify**')
-                for item in job.eligibility:
-                    with st.expander(f'{item.topic.replace("_", " ").capitalize()} · {item.status.replace("_", " ")}'):
-                        st.text(f'“{item.job_quote}”' if item.job_quote else 'Not stated in the pasted posting.')
-                        st.text(item.question_to_check)
-                st.markdown('**Next steps**')
-                for i, step in enumerate(job.next_steps, 1):
-                    st.text(f'{i}. {step}')
-    st.download_button('Download comparison', export_text(result, labels, example),
-                       file_name='applylens-comparison.txt', mime='text/plain')
-
+DEFAULT_RULES = dict(roles='software engineer, data analyst, intern', locations='', remote_only=False,
+                    employment='', excluded_titles='', min_overlap=2, max_days=7, required_terms='', excluded='', daily_limit=5, boards=DEFAULT_BOARDS)
+profile = store.get('profile', {})
+rules = store.get('rules', DEFAULT_RULES)
+apps = store.rows()
+enabled = store.get('enabled', False)
 
 with st.sidebar:
-    st.subheader('ApplyLens')
-    st.caption('Version 0.1 · Built for students')
-    mode = st.radio('Choose a workspace', ['Explore example', 'Compare my jobs'])
+    st.title('↗ ApplyLens')
+    st.caption('YOUR NEXT MOVE, IN MOTION')
     st.divider()
-    st.markdown('**A useful first pass**')
-    st.write('Compare the evidence in your resume with what each posting actually says.')
-    st.caption('Version 1 uses pasted text. It does not search for jobs, verify that listings are open, '
-               'or submit applications.')
-    if mode == 'Compare my jobs':
-        st.divider()
-        key = st.text_input('OpenAI API key', type='password', key='api_key',
-                            help='Used for this session. Leave blank to use OPENAI_API_KEY on your local machine.')
-        api_key = key or os.environ.get('OPENAI_API_KEY', '')
-        st.caption('API usage is billed separately from ChatGPT Plus. No key is needed for the example.')
-        st.caption(f'Model: {os.environ.get("OPENAI_MODEL", MODEL)}')
+    page = st.radio('Workspace', ['Overview', 'My resume', 'Job preferences', 'Discover jobs', 'Applications'], label_visibility='collapsed')
+    st.divider()
+    st.write('● Auto-apply enabled' if enabled else '○ Auto-apply paused')
+    st.caption('Local workspace · Your data stays on this computer until an application is sent.')
+    if enabled and st.button('Pause auto-apply', use_container_width=True):
+        store.put('enabled', False); st.rerun()
+    st.caption('Changing your resume or rules pauses automation.')
 
-st.caption('LESS GUESSING. BETTER APPLICATION DECISIONS.')
-st.title('Find the evidence.\nSee the gaps.')
-st.write('One resume, up to three internships. Compare requirements and spot the details worth checking.')
+st.markdown('<div class="eyebrow">YOUR JOB SEARCH, WITH DIRECTION</div>', unsafe_allow_html=True)
 
-if mode == 'Explore example':
-    with st.expander('See the fictional resume and postings'):
-        st.markdown('**Resume**')
-        st.text(RESUME)
-        for label, job in zip(LABELS, JOBS):
-            st.markdown(f'**{label}**')
-            st.text(job)
-    show_results(example_comparison(), LABELS, example=True)
-else:
-    resume = st.text_area('Your resume', height=220, max_chars=MAX_RESUME,
-                          placeholder='Paste resume text. Remove contact details you do not want to share.', key='resume')
-    count = st.selectbox('Number of jobs', [1, 2, 3], index=1)
-    jobs, labels = [], []
-    for i, col in enumerate(st.columns(count)):
-        with col:
-            label = st.text_input(f'Job {i + 1} label', value=f'Job {i + 1}', key=f'label_{i}', max_chars=80)
-            labels.append(label.strip() or f'Job {i + 1}')
-            jobs.append(st.text_area(f'Job {i + 1} description', height=240, max_chars=MAX_JOB, key=f'job_{i}',
-                                     placeholder='Paste the actual requirements and eligibility wording.'))
-    consent = st.checkbox('Send this resume and these job descriptions to OpenAI for analysis.', key='consent')
-    st.caption('This app does not write your inputs or key to disk. They remain in the active session. '
-               'The API request uses store=False; provider data policies still apply. '
-               'Eligibility notes are questions to verify, not work-authorization advice.')
-    fingerprint = hashlib.sha256(repr((resume, jobs, labels)).encode()).hexdigest()
-    if st.button('Compare internships', type='primary'):
-        st.session_state.pop('comparison', None)
-        try:
-            validate_inputs(resume, jobs)
-            if not api_key:
-                raise ValueError('Add your OpenAI API key in the sidebar, or explore the example.')
-            if not consent:
-                raise ValueError('Confirm that you want to send this text to OpenAI.')
-            with st.spinner('Comparing requirements and checking the supporting quotes…'):
-                result = compare_jobs(resume, jobs, api_key, os.environ.get('OPENAI_MODEL', MODEL))
-            st.session_state.comparison = (fingerprint, result)
-        except AuthenticationError:
-            st.error('The API key was not accepted. Check it in the sidebar.')
-        except RateLimitError:
-            st.error('The API account reached a rate or usage limit. Check your API billing and try later.')
-        except APIConnectionError:
-            st.error('Could not connect to OpenAI. Check your connection and try again.')
-        except APIStatusError:
-            st.error('OpenAI could not complete this request. Check model access or try again later.')
-        except ValueError as exc:
-            # Input/quote errors are local messages. Do not show arbitrary provider responses.
-            if len(str(exc)) < 250:
+
+def job_card(job, can_queue=True):
+    with st.container(border=True):
+        left, right = st.columns([4, 1])
+        left.subheader(job['title'])
+        left.caption(f"{job['company'].title()}  ·  {job['location'] or 'Location not supplied'}  ·  {job['source'].split(':')[0].title()}")
+        right.markdown('**Remote**' if job['remote'] else '**See location**')
+        right.caption('Published ' + job['posted'][:10] if job.get('posted') else 'Publication date unavailable')
+        shared = sorted(tokens(profile.get('resume', '')) & tokens(job['description']))
+        if shared:
+            st.caption('Shared resume keywords: ' + ', '.join(shared[:12]))
+        with st.expander('Job details & tailored resume'):
+            st.text(job['description'][:25000])
+            if profile.get('resume'):
+                tailored, _ = tailor(profile['resume'], job['description'])
+                st.caption('Tailoring reorders relevant bullets within their original sections. Every original line is preserved; no new qualifications are added.')
+                st.download_button('Download tailored resume', docx_bytes(tailored), 'applylens-resume.docx', key='dl_' + job['id'])
+        a, b = st.columns(2)
+        a.link_button('View original listing ↗', job['url'], use_container_width=True)
+        existing = next((x for x in apps if x['id'] == job['id'] and x['status'] != 'cancelled'), None)
+        if b.button(existing['status'].replace('_', ' ').title() if existing else 'Add to application queue',
+                    key='q_' + job['id'], disabled=bool(existing) or not can_queue or not profile.get('resume'), use_container_width=True):
+            if not match(job, rules, resume=profile.get('resume')):
+                store.enqueue(job, manual=True); st.rerun()
+
+if page == 'Overview':
+    st.title('Less searching. More possibilities.')
+    st.write('Your resume, your rules, your next opportunity. Build your profile once and keep your applications moving.')
+    st.write('')
+    cols = st.columns(4)
+    cols[0].metric('Matching jobs', sum(not match(j, rules, resume=profile.get('resume')) for j in store.get('jobs', [])))
+    cols[1].metric('In your queue', sum(a['status'] in {'queued','preparing','submitting'} for a in apps))
+    cols[2].metric('Submitted', sum(a['status'] == 'submitted' for a in apps))
+    cols[3].metric('Needs your attention', sum(a['status'] == 'needs_attention' for a in apps))
+    st.write('')
+    left, right = st.columns([1.5, 1])
+    with left, st.container(border=True):
+        st.subheader('Make it your search')
+        st.markdown(f"{'✓' if profile else '1.'} **Add your resume** — upload a PDF, DOCX, or text file.")
+        st.markdown(f"{'✓' if store.get('rules') else '2.'} **Set your preferences** — roles, location, posting age, and exclusions.")
+        st.markdown('3. **Find jobs & enable auto-apply** — the runner checks your rules before each attempt.')
+        st.caption('Start with My resume in the sidebar. No API key needed for discovery or extractive resume tailoring.')
+    with right, st.container(border=True):
+        st.subheader('Built around your rules')
+        st.write('Freshness filters · Company exclusions · Daily application limits · Duplicate prevention')
+        st.caption('Live search covers your configured Ashby, Greenhouse, and Lever company boards. Automatic submission supports standard Lever forms; other forms open for manual completion.')
+    st.subheader('Recent activity')
+    if not apps:
+        st.info('Your activity will appear here after you add jobs to your queue.')
+    else:
+        st.dataframe([{'Role': a['job']['title'], 'Company': a['job']['company'], 'Status': a['status'].replace('_',' ').title(), 'Updated': a['updated'][:16]} for a in apps[:8]], hide_index=True, use_container_width=True)
+
+elif page == 'My resume':
+    st.title('One profile. A stronger starting point.')
+    st.write('Upload your resume, check the extracted text, and save the details applications should use.')
+    uploaded = st.file_uploader('Resume', type=['pdf','docx','txt'])
+    if uploaded is not None:
+        import hashlib
+        fingerprint = hashlib.sha256(uploaded.getvalue()).hexdigest()
+        if st.session_state.get('uploaded_hash') != fingerprint:
+            try:
+                st.session_state['resume_text'] = extract(uploaded.name, uploaded.getvalue())
+                st.session_state['uploaded_hash'] = fingerprint
+            except ValueError as exc:
                 st.error(str(exc))
-            else:
-                st.error('The response could not be validated. Please try again.')
-    saved = st.session_state.get('comparison')
-    if saved and saved[0] == fingerprint:
-        show_results(saved[1], labels)
-    elif saved:
-        st.info('Your inputs changed. Run a new comparison to see updated results.')
+    with st.form('profile_form'):
+        c1, c2 = st.columns(2)
+        name = c1.text_input('Full name', value=profile.get('name',''))
+        email = c2.text_input('Email', value=profile.get('email',''))
+        phone = c1.text_input('Phone (optional)', value=profile.get('phone',''))
+        company = c2.text_input('Current company (optional)', value=profile.get('company',''))
+        linkedin = c1.text_input('LinkedIn URL (optional)', value=profile.get('linkedin',''))
+        github = c2.text_input('GitHub URL (optional)', value=profile.get('github',''))
+        website = c1.text_input('Portfolio URL (optional)', value=profile.get('website',''))
+        if 'resume_text' not in st.session_state:
+            st.session_state['resume_text'] = profile.get('resume','')
+        resume = st.text_area('Resume text — review and edit before saving', height=340, key='resume_text', max_chars=40000)
+        st.caption('Saved locally in private_data. Original uploads are not retained. Extraction may lose layout; downloads use a clean document layout.')
+        saved = st.form_submit_button('Save my profile', type='primary')
+    if saved:
+        if not name.strip() or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email.strip()) or len(resume.strip()) < 80:
+            st.error('Enter your name, a valid email, and at least 80 characters of resume text.')
+        else:
+            store.save_configuration('profile', dict(name=name.strip(), email=email.strip(), phone=phone.strip(), company=company.strip(), linkedin=linkedin.strip(), github=github.strip(), website=website.strip(), resume=resume.strip()))
+            st.success('Profile saved. Auto-apply is paused so you can review your rules.')
+
+elif page == 'Job preferences':
+    st.title('Good opportunities. On your terms.')
+    st.write('These are hard filters. Jobs with missing information cannot pass a filter that requires it.')
+    with st.form('rules_form'):
+        c1, c2 = st.columns(2)
+        roles = c1.text_input('Role titles — comma separated', value=rules['roles'])
+        locations = c2.text_input('Locations — comma separated; blank means any', value=rules['locations'])
+        remote = c1.checkbox('Remote only', value=rules['remote_only'])
+        employment = c2.selectbox('Employment type', ['', 'Intern', 'FullTime', 'PartTime', 'Contract'], index=['', 'Intern', 'FullTime', 'PartTime', 'Contract'].index(rules['employment']), format_func=lambda x: x or 'Any')
+        days = c1.selectbox('Posted within', [1,3,7,14,30,0], index=[1,3,7,14,30,0].index(rules['max_days']), format_func=lambda x: f'{x} days' if x else 'Any time (includes unknown dates)')
+        limit = c2.number_input('Maximum application attempts per day (UTC)', 1, 50, rules['daily_limit'])
+        excluded_titles = c1.text_input('Exclude title keywords — e.g. senior, staff, director', value=rules.get('excluded_titles',''))
+        min_overlap = c2.number_input('Minimum shared resume keywords', 0, 20, rules.get('min_overlap',2), help='A transparent keyword filter, not a qualification or eligibility score.')
+        required = c1.text_input('All of these keywords must appear in the posting', value=rules['required_terms'])
+        excluded = c2.text_input('Exclude companies — comma separated', value=rules['excluded'])
+        st.caption('Remote roles can still have country restrictions. Set a location filter when needed. Salary and sponsorship are not inferred or used as automatic filters in this version.')
+        boards = st.text_area('Company job boards to search', value=rules['boards'], height=160,
+            help='One per line: ashby:company, lever:company, or greenhouse:company. Use the company identifier from its hosted careers URL.')
+        st.caption('Search uses public company feeds, not all jobs on the internet. Boards are configurable; missing publication dates are excluded when an age limit is selected.')
+        saved = st.form_submit_button('Save my rules', type='primary')
+    if saved:
+        try:
+            if not any(x.strip() for x in roles.split(',')) or not board_specs(boards):
+                raise ValueError('Add at least one role and one company board.')
+            store.save_configuration('rules', dict(roles=roles, locations=locations, remote_only=remote, employment=employment,
+                max_days=days, excluded_titles=excluded_titles, min_overlap=int(min_overlap), daily_limit=int(limit), required_terms=required, excluded=excluded, boards=boards))
+            st.success('Rules saved. Review the matching jobs, then enable auto-apply in Applications.')
+        except ValueError as exc:
+            st.error(str(exc))
+
+elif page == 'Discover jobs':
+    st.title('Find your next move.')
+    st.write('Search live company boards. Your saved rules filter the results before anything enters the queue.')
+    if st.button('Search live jobs', type='primary'):
+        with st.spinner('Checking company job boards…'):
+            jobs, errors = discover(rules['boards'])
+            store.put('jobs', jobs); store.put('search_errors', errors); store.put('last_search', store.now())
+    for error in store.get('search_errors', []):
+        st.warning(error)
+    jobs = store.get('jobs', [])
+    matches = [j for j in jobs if not match(j, rules, resume=profile.get('resume'))]
+    matches.sort(key=lambda j: j.get('posted') or '', reverse=True)
+    st.caption(f"{len(matches)} matching · {len(jobs)} live listings checked · Last search: {store.get('last_search', 'not run')[:19]}")
+    if not profile:
+        st.info('You can explore jobs now. Save your resume to create tailored documents and queue applications.')
+    if jobs and not matches:
+        st.info('No jobs meet every rule. Try broader role titles, different company boards, or a longer posting-age window.')
+    if jobs:
+        with st.expander('Why other jobs were filtered out'):
+            st.dataframe([{'Role': j['title'], 'Company': j['company'], 'Reasons': '; '.join(match(j, rules, resume=profile.get('resume')))} for j in jobs if match(j, rules, resume=profile.get('resume'))], hide_index=True)
+    page_number = st.number_input('Results page', 1, max(1, (len(matches)+9)//10), 1)
+    for job in matches[(page_number-1)*10:page_number*10]:
+        job_card(job)
+    if not jobs:
+        st.info('Click Search live jobs to fetch listings. No sample listings or fabricated application counts are shown.')
+
+elif page == 'Applications':
+    st.title('Your applications, moving forward.')
+    st.write('Enable the local runner to find matching jobs every 30 minutes and process your application queue.')
+    with st.container(border=True):
+        st.subheader('Auto-apply controls')
+        st.write(f"Daily limit: **{rules['daily_limit']} attempts** · Current state: **{'Enabled' if enabled else 'Paused'}**")
+        heartbeat = store.get('heartbeat')
+        alive = bool(heartbeat and (datetime.now(timezone.utc) - datetime.fromisoformat(heartbeat)).total_seconds() < 60)
+        st.caption('Runner connected' if alive else 'Runner is not connected. Enabling auto-apply starts it on this computer.')
+        if store.get('runner_error'):
+            st.warning(store.get('runner_error'))
+        consent = st.checkbox('Automatically send my saved profile and tailored resume to employers matching my saved rules, up to my daily limit.')
+        if st.button('Enable auto-apply', type='primary', disabled=not consent or not profile or not store.get('rules')):
+            store.put('enabled', True)
+            if not alive:
+                subprocess.Popen([sys.executable, str(Path(__file__).with_name('worker.py'))], cwd=Path(__file__).parent,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            st.rerun()
+        if st.button('Pause auto-apply now', disabled=not enabled):
+            store.put('enabled', False); st.rerun()
+        st.caption('The computer must remain awake. Standard Lever forms can be submitted automatically. CAPTCHA, login, agreements, custom questions, and other job sites require your attention. Pausing cannot undo an application already sent.')
+    if st.button('Refresh application status'):
+        st.rerun()
+    status = st.selectbox('Show', ['All','queued','preparing','submitting','submitted','needs_attention','cancelled','closed'])
+    visible = [a for a in apps if status == 'All' or a['status'] == status]
+    if not visible:
+        st.info('No applications here yet. Add matching jobs from Discover jobs, or enable auto-apply to discover and queue them automatically.')
+    for a in visible:
+        with st.container(border=True):
+            st.subheader(a['job']['title'])
+            st.caption(a['job']['company'].title() + ' · ' + a['status'].replace('_',' ').title())
+            st.write(a['note'])
+            st.link_button('Open employer application ↗', a['job']['apply_url'])
+            if a['resume']:
+                st.download_button('Download this application’s resume', docx_bytes(a['resume']), 'applylens-resume.docx', key='resume_'+a['id'])
+            if a['status'] == 'queued' and st.button('Cancel this application', key='cancel_'+a['id']):
+                store.update(a['id'], 'cancelled', 'Cancelled by you.'); st.rerun()
+    if apps:
+        import csv, io
+        output = io.StringIO(); writer = csv.writer(output)
+        writer.writerow(['Role','Company','Status','Application URL','Updated','Note'])
+        for a in apps:
+            # Guard spreadsheet formula execution in untrusted job titles.
+            writer.writerow([("'"+str(v)) if str(v).startswith(('=','+','-','@')) else v for v in [a['job']['title'],a['job']['company'],a['status'],a['job']['apply_url'],a['updated'],a['note']]])
+        st.download_button('Export application history', output.getvalue(), 'applylens-applications.csv', 'text/csv')
 
 st.divider()
-st.caption('Built as a learning project. Read the source quotes, check the original posting, and make your own decision.')
+st.caption('ApplyLens · A local workspace for your job search. You control the profile, the rules, and the pause button.')

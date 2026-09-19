@@ -93,7 +93,7 @@ def test_export_keeps_evidence_and_demo_label():
 
 
 def test_app_example_and_missing_input():
-    app = AppTest.from_file(str(Path(__file__).with_name('app.py'))).run()
+    app = AppTest.from_file(str(Path(__file__).with_name('legacy_compare.py'))).run()
     assert not app.exception
     assert len(app.metric) == 2
     app.radio[0].set_value('Compare my jobs').run()
@@ -103,7 +103,7 @@ def test_app_example_and_missing_input():
 
 
 def test_app_live_flow_with_mock_and_stale_result():
-    app = AppTest.from_file(str(Path(__file__).with_name('app.py'))).run()
+    app = AppTest.from_file(str(Path(__file__).with_name('legacy_compare.py'))).run()
     app.radio[0].set_value('Compare my jobs').run()
     app.text_area(key='resume').set_value(RESUME)
     app.text_area(key='job_0').set_value(JOBS[0])

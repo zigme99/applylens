@@ -1,171 +1,96 @@
-# ApplyLens
+# ApplyLens ↗
 
-**A resume-to-internship comparison tool for students.**
+**Upload your resume. Set your rules. Keep your job search moving.**
 
-Paste your resume and up to three job descriptions. ApplyLens brings the requirements, supporting resume evidence, and unanswered eligibility questions into one comparison, so you can decide what to clarify and how to prepare an application.
+ApplyLens is a local, single-user job-search and application workspace. It replaces the original paste-and-compare screen with a resume profile, live job discovery, tailored document downloads, an application queue, and a background runner.
 
-[Quick start](#quick-start) · [Example](#example-comparison) · [How it works](#how-it-works) · [Roadmap](#roadmap)
+## What works today
 
-## Why this project
+- **Resume upload:** PDF, DOCX, and TXT, with editable extracted text and a saved applicant profile.
+- **Live discovery:** searches configurable company boards using the public Ashby, Greenhouse, and Lever feeds. Default boards are included; this is not an internet-wide job index.
+- **Your rules:** role titles, excluded title keywords, location, remote-only, employment type, posting age, required posting keywords, minimum shared resume keywords, excluded companies, and daily attempt limits.
+- **Truthful tailoring:** relevant bullet points move earlier *within their original section*. Every original line is preserved. Download an editable DOCX. This is extractive tailoring, not AI rewriting or a claim of qualification.
+- **Application queue:** durable SQLite state, duplicate protection, current-listing revalidation, cancellation, pause, and CSV history export.
+- **Background runner:** checks configured boards every 30 minutes and processes queued jobs while enabled and the computer is awake.
+- **Limited auto-submission:** a browser adapter for standard hosted Lever forms with recognized applicant fields. It uploads the tailored resume and submits only after the user enables auto-apply. Employer confirmation text is required to record success.
 
-Comparing internships means repeatedly checking the same things: required skills, preferred experience, graduation dates, location, and work-authorization wording. A requirement missing from your resume also does not necessarily mean you lack that skill.
+## Important scope
 
-ApplyLens makes those distinctions visible and keeps the original wording beside the analysis. The goal is to help students make informed application decisions, without an unexplained match percentage.
+This is an initial local product, not a universal application bot. **Real employer submission has not been end-to-end verified.** Automated tests use mocked employer responses and form metadata. Ashby and Greenhouse discovery work, but their application forms currently require manual completion. Lever forms with CAPTCHA, login, custom questions, consent choices, or agreements also move to **Needs attention**. The runner does not bypass those steps, invent answers, or automatically retry an uncertain submission.
 
-## Features
+It does not yet support salary/sponsorship inference, arbitrary job-board search, semantic qualification scoring, AI resume rewriting, cover letters, LinkedIn/Indeed/Workday automation, email inbox tracking, or multi-user hosting. A keyword match is not an eligibility decision. A remote listing can still restrict where you live.
 
-- **Compare 1–3 postings:** review each role alongside the same resume.
-- **Inspect supporting evidence:** expand a requirement to see quotes from the posting and resume.
-- **Identify resume gaps:** distinguish evidence found from qualifications not shown in the supplied text.
-- **Check eligibility details:** surface enrollment, graduation, work authorization, sponsorship, and location wording. Unspecified details remain “not stated.”
-- **Prepare next actions:** review suggested questions and application preparation steps.
-- **Export the comparison:** download a plain-text copy.
-- **Try a free example:** explore fictional inputs and a prepared comparison without an API key.
+## Run locally (macOS / Linux)
 
-## Example comparison
-
-The bundled example uses fictional student Jordan Lee and two fictional companies:
-
-| Posting requirement | Resume evidence | Result |
-|---|---|---|
-| Python and SQL | Both are listed in the skills section | Evidence found |
-| REST API experience preferred | A Flask API project is described | Relevant evidence found |
-| Tableau preferred | Tableau is not mentioned | Not shown in the resume |
-| Sponsorship policy | No policy appears in the first posting | Not stated; ask the employer |
-
-The example is **hand-written sample output**, not a live model response. It demonstrates the interface and evidence format without sending data to an API.
-
-## Tech stack
-
-| Tool | Purpose |
-|---|---|
-| Python | Application and comparison logic |
-| Streamlit | Input forms, comparison view, and downloads |
-| OpenAI Responses API | Structured analysis of the supplied text |
-| Pydantic | Response schemas and validation |
-| pytest + Streamlit AppTest | Validation, mocked API, and interface tests |
-
-**Version 1 uses one structured model request.** It is the comparison component of a future internship-search assistant; autonomous search and tool-calling workflows are planned, not implemented.
-
-## Quick start
-
-### 1. Clone and create an environment
-
-Requires **Python 3.10+**. Development checks were run on Python 3.12.
+Python 3.10+ required. The background runner uses a POSIX process lock.
 
 ```bash
 git clone https://github.com/zigme99/applylens.git
 cd applylens
-python -m venv .venv
-```
-
-Activate the environment:
-
-**macOS / Linux**
-
-```bash
+python3 -m venv .venv
 source .venv/bin/activate
-```
-
-**Windows PowerShell**
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-### 2. Install and run
-
-```bash
 python -m pip install -r requirements.txt
+python -m playwright install chromium
 python -m streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
 ```
 
-Open the local URL printed in your terminal. The app starts in **Explore example**, which needs no API key.
+1. Open **My resume**, upload a file, review the text, and save your profile.
+2. Open **Job preferences** and save your filters and company boards.
+3. Open **Discover jobs** and search live listings. Inspect postings and download tailored resumes or add jobs to the queue.
+4. In **Applications**, read the scope, authorize sending your profile and resume to matching employers, and enable auto-apply. The UI starts the local worker. Leave the computer awake.
+5. Review **Needs attention** items and complete unsupported forms on the employer site.
 
-### 3. Compare your own postings
+Use the sidebar pause button to stop new attempts. Editing your profile or rules also pauses automation and cancels queued work made under old settings. Pausing cannot retract a request already sent. The daily UTC limit counts attempts that began transmitting data, including uncertain outcomes; it is not a promise of a number of successful submissions.
 
-1. Choose **Compare my jobs** in the sidebar.
-2. Enter an OpenAI API key in the password field, or configure `OPENAI_API_KEY` in your environment.
-3. Paste your resume and select one, two, or three jobs.
-4. Add a label and the full description for each job.
-5. Review the data-sharing notice, select the consent checkbox, and click **Compare internships**.
-6. Expand the evidence and eligibility sections, then download the comparison if useful.
+You can also start the worker yourself:
 
-Changing the input hides the previous comparison until you run it again.
-
-### Configuration
-
-| Setting | Default | Notes |
-|---|---|---|
-| `OPENAI_API_KEY` | None | Optional environment alternative to the sidebar password field |
-| `OPENAI_MODEL` | `gpt-4.1-mini` | Must support the Responses API and structured outputs |
-| Resume length | 80–15,000 characters | Paste text; PDF parsing is not included |
-| Each job description | 80–12,000 characters | One to three descriptions per comparison |
-
-The app does not automatically load `.env` files. OpenAI API usage requires separate API access and billing; a ChatGPT Plus subscription does not cover these requests.
-
-## How it works
-
-```text
-Resume + job descriptions
-          |
-     Validate inputs
-          |
-  Request structured analysis
-          |
-   Validate response schema
-          |
- Check quotes against source text
-          |
-  Display and export comparison
+```bash
+python worker.py
+# Or process one cycle, for diagnostics:
+python worker.py --once
 ```
 
-The prompt asks the model to treat pasted documents as data and extract relevant requirements. Pydantic checks the response structure. Local checks then verify job ordering, eligibility topics, and whether each supporting quote exists in the correct source.
+Only one worker can hold the data-directory lock. An interrupted submission is never silently retried after restart.
 
-Quote checks normalize whitespace introduced by copying and pasting. A quote that is absent from its source causes the comparison to be rejected.
+## Job sources
 
-**A verified quote is not a verified conclusion.** These checks do not establish that the model interpreted the evidence correctly or extracted every important requirement. Review the original posting before acting on the analysis.
-
-## Project structure
+Use up to 20 boards, one per line, using the company identifier from the hosted careers URL:
 
 ```text
-applylens/
-├── app.py            # Streamlit interface and session state
-├── compare.py        # Schemas, prompt, API call, evidence checks, export
-├── examples.py       # Fictional inputs and prepared example output
-├── test_compare.py   # Unit and interface tests
-├── requirements.txt  # Pinned direct dependencies
-├── .gitignore
-└── README.md
+ashby:linear
+ashby:notion
+lever:sep
+greenhouse:figma
+greenhouse:stripe
 ```
 
-## Testing
+Data comes from [Ashby's public posting API](https://developers.ashbyhq.com/docs/public-job-posting-api), [Lever's public posting API](https://github.com/lever/postings-api), and [Greenhouse's job board API](https://docs.greenhouse.io/job-board.html). No employer API keys are required for listing discovery. Missing publication dates remain unknown and fail an active age filter. Greenhouse `updated_at` is never treated as a publication date.
+
+## Privacy and storage
+
+Profiles, extracted resume text, preferences, listings, and application history are stored in `private_data/applylens.db` on your computer. Original uploads are not retained. Temporary application DOCX files are removed after each attempt. The folder is excluded from Git. It is **not encrypted at rest**; use your device's account and disk protections. Set `APPLYLENS_DATA_DIR` to choose a different local storage folder.
+
+The new workflow does not send documents to an AI provider and needs no API key. Enabling auto-apply permits sending your saved contact fields and tailored resume to matching supported employer forms. Browser processes are ephemeral; saved browser credentials are not used. Keep the server on loopback; the app has no multi-user authentication and is not ready for public hosting.
+
+The earlier API comparison experiment is retained separately as `legacy_compare.py` for reference and its existing tests. It is not part of the main application workflow.
+
+## Validation
 
 ```bash
 python -m pytest -q
 ```
 
-**Initial validation: 18 tests passed.** Tests cover input limits, invented or misplaced quotes, missing eligibility topics, provider refusal handling, exports, and Streamlit interactions. The application also started locally.
+Tests cover source normalization, partial feed failure, freshness and hard filters, document import, faithful tailoring, duplicate and cancellation behavior, revision changes, pause and daily quota enforcement, interrupted submissions, unsupported forms, worker transitions, and all five UI pages. No real applications are sent by the test suite.
 
-Provider responses are mocked in the tests. **A live API comparison has not yet been verified**, and real-model accuracy has not been measured.
+## Structure
 
-## Privacy and current limits
-
-- Inputs, keys, and results are held in the active Streamlit session. The app does not intentionally save them to disk or cache API calls.
-- Live analysis sends the pasted resume and descriptions to OpenAI. Requests use `store=False`, which does not disable every form of provider retention. Review [OpenAI's data controls](https://developers.openai.com/api/docs/guides/your-data) and remove unnecessary personal details before submitting.
-- The sample contains no real resumes. Common secret files are excluded by `.gitignore`.
-- Version 1 is designed for local use. Public hosting would need access controls, usage limits, and an appropriate privacy policy.
-- The app does not search job boards, check whether listings are open, submit applications, or determine work authorization. Eligibility notes identify questions to verify.
-
-## Roadmap
-
-- [ ] Test model output against a small, manually reviewed set of resume/posting pairs.
-- [ ] Add a search tool and bounded agent loop for researching accessible postings.
-- [ ] Save shortlists and application progress with SQLite.
-- [ ] Introduce resumable workflow state if the research process needs it.
-
-## Feedback
-
-Found a confusing comparison or a missing check? [Open an issue](https://github.com/zigme99/applylens/issues) with a short description and a fictional or redacted example. Do not include API keys or private resume details.
-
-Built with AI-assisted development as a practical learning project in structured LLM outputs, evidence validation, and Python application development.
+| File | Purpose |
+|---|---|
+| `app.py` | Streamlit product UI |
+| `sources.py` | Public feeds and hard filters |
+| `resumes.py` | Resume extraction, bullet ordering, DOCX export |
+| `storage.py` | SQLite state, atomic quota reservation, audit events |
+| `worker.py` | Persistent local discovery and application runner |
+| `automation.py` | Limited Lever adapter and manual handoff conditions |
+| `test_product.py` | New product tests |
+| `legacy_compare.py`, `compare.py`, `examples.py` | Original comparison experiment |
